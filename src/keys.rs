@@ -6,52 +6,8 @@ use std::io::Read;
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::{ Arc, Mutex };
-use std::sync::atomic::{ AtomicU64, Ordering };
 use std::sync::mpsc::{ self, Receiver, Sender };
 use std::time::Duration;
-
-struct KeyHolder {
-    key: String,
-    timeout: u64,
-    current_timeout: AtomicU64,
-}
-impl KeyHolder {
-    pub fn new(key:String, timeout:u64, tx: Sender<String>) -> Arc<Self> {
-        let key_holder = Arc::new(Self {
-            key,
-            timeout,
-            current_timeout: AtomicU64::new(timeout),
-        });
-
-        {
-            let key_holder = key_holder.clone();
-            std::thread::spawn(move || {
-                loop {
-                    if key_holder.tick() {
-                        key_holder.current_timeout.swap(0, Ordering::Release);
-                        if let Err(e) = tx.send(key_holder.key.clone()) {
-                            error!("{}", e);
-                            break;
-                        }
-                    }
-                    std::thread::sleep(Duration::from_secs(1));
-                }
-            });
-        }
-
-        key_holder
-    }
-
-    fn tick(&self) -> bool {
-        if self.current_timeout.load(Ordering::Acquire) < self.timeout {
-            let current_timeout = self.current_timeout.load(Ordering::Acquire);
-            self.current_timeout.swap(current_timeout + 1, Ordering::Release);
-            false
-        } else {
-            true
-        }
-    }
-}
 
 pub struct KeyResult {
     key: Arc<Mutex<Option<Option<String>>>>,
@@ -96,7 +52,6 @@ impl Future for KeyResult {
 }
 
 pub struct KeysCarousel {
-    key_holders: Vec<Arc<KeyHolder>>,
     requests: Sender<Sender<String>>,
 }
 impl KeysCarousel {
@@ -113,8 +68,11 @@ impl KeysCarousel {
 
     pub fn new(keys:Vec<String>, timeout:u64) -> Self {
         let (key_tx, key_rx) = mpsc::channel();
+        for key in keys.iter() {
+            Self::spawn_key(key, timeout, key_tx.clone());
+        }
+
         let (req_tx, req_rx):(Sender<Sender<String>>, Receiver<Sender<String>>) = mpsc::channel();
-        let key_holders = keys.iter().map(|key| KeyHolder::new(key.to_string(), timeout, key_tx.clone())).collect::<Vec<Arc<KeyHolder>>>();
 
         std::thread::spawn(move || {
             loop {
@@ -135,7 +93,6 @@ impl KeysCarousel {
         });
 
         Self {
-            key_holders,
             requests: req_tx,
         }
     }
@@ -145,5 +102,24 @@ impl KeysCarousel {
         let res = KeyResult::new(rx);
         self.requests.send(tx).map_err(|_| ())?;
         Ok(res)
+    }
+
+    fn spawn_key(key:&str, max_timeout:u64, tx:Sender<String>) {
+        let key = key.to_string();
+        std::thread::spawn(move || {
+            let mut current_timeout = max_timeout;
+            loop {
+                if current_timeout < max_timeout {
+                    current_timeout += 1;
+                } else {
+                    current_timeout = 0;
+                    if let Err(_) = tx.send(key.clone()) {
+                        error!("key receiver in key carousel has been dropped");
+                        break;
+                    }
+                }
+                std::thread::sleep(Duration::from_secs(1));
+            }
+        });
     }
 }
