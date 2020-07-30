@@ -1,6 +1,8 @@
 #[macro_use]
 extern crate lazy_static;
 #[macro_use]
+extern crate log;
+#[macro_use]
 extern crate thiserror;
 
 mod hashes;
@@ -17,8 +19,8 @@ async fn main() {
 
     let queryer = Queryer::new();
     for hash in hashes {
-        let res = queryer.query(keys.get_key().unwrap(), hash).await.unwrap();
+        let key = keys.get_key().unwrap().await.unwrap();
+        let res = queryer.query(&key, hash).await.unwrap();
         println!("{:?}", res);
-        std::thread::sleep(std::time::Duration::from_secs(15));
     }
 }

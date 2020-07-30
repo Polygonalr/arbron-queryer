@@ -1,9 +1,13 @@
+use futures::Future;
+use futures::task::{ Context, Poll, Waker };
 use regex::Regex;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
-use std::sync::Arc;
+use std::pin::Pin;
+use std::sync::{ Arc, Mutex };
 use std::sync::atomic::{ AtomicU64, Ordering };
+use std::sync::mpsc::{ self, Receiver, Sender };
 use std::time::Duration;
 
 struct KeyHolder {
@@ -12,36 +16,91 @@ struct KeyHolder {
     current_timeout: AtomicU64,
 }
 impl KeyHolder {
-    pub fn new(key:String, timeout:u64) -> Self {
-        Self {
+    pub fn new(key:String, timeout:u64, tx: Sender<String>) -> Arc<Self> {
+        let key_holder = Arc::new(Self {
             key,
             timeout,
             current_timeout: AtomicU64::new(timeout),
+        });
+
+        {
+            let key_holder = key_holder.clone();
+            std::thread::spawn(move || {
+                loop {
+                    if key_holder.tick() {
+                        key_holder.current_timeout.swap(0, Ordering::Release);
+                        if let Err(e) = tx.send(key_holder.key.clone()) {
+                            error!("{}", e);
+                            break;
+                        }
+                    }
+                    std::thread::sleep(Duration::from_secs(1));
+                }
+            });
         }
+
+        key_holder
     }
 
-    pub fn get_key(&self) -> Option<&str> {
-        if self.current_timeout.load(Ordering::Acquire) >= self.timeout {
-            self.current_timeout.swap(0, Ordering::Release);
-            Some(&self.key)
-        } else {
-            None
-        }
-    }
-
-    pub fn tick(&self) {
+    fn tick(&self) -> bool {
         if self.current_timeout.load(Ordering::Acquire) < self.timeout {
             let current_timeout = self.current_timeout.load(Ordering::Acquire);
             self.current_timeout.swap(current_timeout + 1, Ordering::Release);
+            false
+        } else {
+            true
+        }
+    }
+}
+
+pub struct KeyResult {
+    key: Arc<Mutex<Option<Option<String>>>>,
+    waker: Arc<Mutex<Option<Waker>>>,
+}
+impl KeyResult {
+    pub fn new(rx:Receiver<String>) -> Self {
+        let key_result = KeyResult {
+            key: Arc::new(Mutex::new(None)),
+            waker: Arc::new(Mutex::new(None)),
+        };
+
+        let key = key_result.key.clone();
+        let waker = key_result.waker.clone();
+        std::thread::spawn(move || {
+            let res = rx.recv();
+
+            let mut key = key.lock().unwrap();
+            *key = Some(res.ok());
+
+            let mut waker = waker.lock().unwrap();
+            if let Some(waker) = waker.take() {
+                waker.wake();
+            }
+        });
+
+        key_result
+    }
+}
+impl Future for KeyResult {
+    type Output = Option<String>;
+    fn poll(self:Pin<&mut Self>, ctx:&mut Context) -> Poll<Self::Output> {
+        let key = self.key.lock().unwrap();
+        if let Some(res) = key.clone() {
+            Poll::Ready(res.clone())
+        } else {
+            let mut waker = self.waker.lock().unwrap();
+            *waker = Some(ctx.waker().clone());
+            Poll::Pending
         }
     }
 }
 
 pub struct KeysCarousel {
-    keys: Vec<KeyHolder>,
+    key_holders: Vec<Arc<KeyHolder>>,
+    requests: Sender<Sender<String>>,
 }
 impl KeysCarousel {
-    pub fn from_file(filename:&str, timeout:u64) -> Result<Arc<Self>, std::io::Error> {
+    pub fn from_file(filename:&str, timeout:u64) -> Result<Self, std::io::Error> {
         let mut file = File::open(Path::new(filename))?;
         let mut s = String::new();
         file.read_to_string(&mut s)?;
@@ -52,33 +111,39 @@ impl KeysCarousel {
         Ok(Self::new(keys, timeout))
     }
 
-    pub fn new(keys:Vec<String>, timeout:u64) -> Arc<Self> {
-        let keys = keys.iter().map(|key| KeyHolder::new(key.to_string(), timeout)).collect::<Vec<KeyHolder>>();
+    pub fn new(keys:Vec<String>, timeout:u64) -> Self {
+        let (key_tx, key_rx) = mpsc::channel();
+        let (req_tx, req_rx):(Sender<Sender<String>>, Receiver<Sender<String>>) = mpsc::channel();
+        let key_holders = keys.iter().map(|key| KeyHolder::new(key.to_string(), timeout, key_tx.clone())).collect::<Vec<Arc<KeyHolder>>>();
 
-        let kc = Arc::new(Self {
-            keys,
+        std::thread::spawn(move || {
+            loop {
+                if let Ok(req) = req_rx.recv() {
+                    if let Ok(key) = key_rx.recv() {
+                        if let Err(_) = req.send(key) {
+                            warn!("request receiver has been dropped");
+                        }
+                    } else {
+                        error!("all key transmitters have been dropped");
+                        break;
+                    }
+                } else {
+                    error!("request transmitter has been dropped");
+                    break;
+                }
+            }
         });
 
-        {
-            let kc = kc.clone();
-            std::thread::spawn(move || {
-                loop {
-                    kc.tick();
-                    std::thread::sleep(Duration::from_secs(1));
-                }
-            });
+        Self {
+            key_holders,
+            requests: req_tx,
         }
-
-        kc
     }
 
-    pub fn get_key(&self) -> Option<&str> {
-        self.keys.iter().filter_map(|k| k.get_key()).next()
-    }
-
-    pub fn tick(&self) {
-        for key in &self.keys {
-            key.tick();
-        }
+    pub fn get_key(&self) -> Result<KeyResult, ()> {
+        let (tx, rx) = mpsc::channel();
+        let res = KeyResult::new(rx);
+        self.requests.send(tx).map_err(|_| ())?;
+        Ok(res)
     }
 }

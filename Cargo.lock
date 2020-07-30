@@ -816,7 +816,9 @@ dependencies = [
 name = "queryer"
 version = "0.1.0"
 dependencies = [
+ "futures",
  "lazy_static",
+ "log 0.4.11",
  "regex",
  "reqwest",
  "serde",
