@@ -14,6 +14,8 @@ use requester::Queryer;
 
 #[tokio::main]
 async fn main() {
+    env_logger::init();
+
     let keys = KeysCarousel::from_file("keys.txt", 15).unwrap();
     let hashes = vec!["3395856ce81f2b7382dee72602f798b642f14140", "d235c2a0f84d55653fe91d9af7d804f5"];
 
