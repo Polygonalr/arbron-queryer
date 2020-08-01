@@ -6,7 +6,7 @@ use serde::{ Deserialize, Serialize };
 const VIRUSTOTAL_FILES_URL:&'static str = "https://www.virustotal.com/api/v3/files";
 
 #[derive(Debug, Clone, Error)]
-pub enum QueryError {
+pub enum RequestError {
     #[error("a fatal error occured requesting: {0}")]
     Fatal(String),
     #[error("a non-fatal error occured requesting: {0}")]
@@ -14,7 +14,7 @@ pub enum QueryError {
     #[error("rate limited of api key exceeded")]
     RateLimitExceeded,
 }
-impl QueryError {
+impl RequestError {
     pub fn from_reqwest_error(e:&reqwest::Error) -> Self {
         let message = format!("{}", e);
 
@@ -58,17 +58,17 @@ impl HashResult {
     }
 }
 
-pub struct Queryer {
+pub struct Requester {
     client: Client,
 }
-impl Queryer {
+impl Requester {
     pub fn new() -> Self {
         Self {
             client: Client::new(),
         }
     }
 
-    pub async fn query(&self, api_key:&str, hash:&str) -> Result<HashResult, QueryError> {
+    pub async fn query(&self, api_key:&str, hash:&str) -> Result<HashResult, RequestError> {
         match self.send_query(api_key, hash).await {
             Ok(Some(res)) => match res.data.attributes.last_analysis_results.symantec {
                 Some(symantec) => Ok(HashResult::new(hash, &res.data.attributes.md5, &symantec.category)),
@@ -77,7 +77,7 @@ impl Queryer {
             Ok(None) => Ok(HashResult::not_found(hash)),
             Err(e) => match e.status() {
                 Some(StatusCode::NOT_FOUND) => Ok(HashResult::not_found(hash)),
-                _ => return Err(QueryError::from_reqwest_error(&e)),
+                _ => return Err(RequestError::from_reqwest_error(&e)),
             },
         }
     }
