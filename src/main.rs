@@ -20,7 +20,7 @@ use rpc::HashQueryServer;
 
 use async_std::net::TcpListener;
 use futures::{ AsyncReadExt, FutureExt };
-use std::net::ToSocketAddrs;
+use std::net::{ ToSocketAddrs, SocketAddr };
 use capnp_rpc::RpcSystem;
 use capnp_rpc::rpc_twoparty_capnp::Side;
 use capnp_rpc::twoparty::VatNetwork;
@@ -29,17 +29,48 @@ use capnp_rpc::twoparty::VatNetwork;
 async fn main() {
     env_logger::init();
 
-    let keys = KeysCarousel::from_file("keys.txt", 15).unwrap();
+    let keys = match KeysCarousel::from_file("keys.txt", 15) {
+        Ok(keys) => keys,
+        Err(e) => {
+            error!("error reading keys file: {}", e);
+            return;
+        },
+    };
     let server = HashQueryServer::new(Queryer::new(keys));
 
-    let addr = ":1539".to_socket_addrs().unwrap().next().unwrap();
+    let addr = match to_addr(":1539") {
+        Ok(addr) => addr,
+        Err(e) => {
+            error!("{}", e);
+            return;
+        },
+    };
+
     async_std::task::block_on(async move {
-        let listener = TcpListener::bind(&addr).await.unwrap();
+        let listener = match TcpListener::bind(&addr).await {
+            Ok(listener) => listener,
+            Err(e) => {
+                error!("cannot bind listener: {}", e);
+                return;
+            },
+        };
+
         let client:Client = capnp_rpc::new_client(server);
 
         loop {
-            let (stream, _) = listener.accept().await.unwrap();
-            stream.set_nodelay(true).unwrap();
+            let stream = match listener.accept().await {
+                Ok((stream, _)) => stream,
+                Err(e) => {
+                    warn!("unable to accept a connection: {}", e);
+                    continue;
+                },
+            };
+
+            if let Err(e) = stream.set_nodelay(true) {
+                warn!("unable to set nodelay: {}", e);
+                continue;
+            }
+
             let (reader, writer) = stream.split();
             let network = VatNetwork::new(reader, writer, Side::Server, Default::default());
 
@@ -47,4 +78,11 @@ async fn main() {
             async_std::task::spawn_local(rpc_system.map(|_| ()));
         }
     });
+}
+
+fn to_addr(raw:&str) -> Result<SocketAddr, String> {
+    raw.to_socket_addrs()
+        .map_err(|e| format!("error parsing address: {}", e))?
+        .next()
+        .map_or(Err(String::from("no address found in provided raw")), |addr| Ok(addr))
 }
