@@ -57,6 +57,7 @@ async fn main() {
 
         let client:Client = capnp_rpc::new_client(server);
 
+        info!("listening on {}", addr);
         loop {
             let stream = match listener.accept().await {
                 Ok((stream, _)) => stream,
