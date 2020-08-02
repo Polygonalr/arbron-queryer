@@ -24,6 +24,7 @@ use std::net::{ ToSocketAddrs, SocketAddr };
 use capnp_rpc::RpcSystem;
 use capnp_rpc::rpc_twoparty_capnp::Side;
 use capnp_rpc::twoparty::VatNetwork;
+use tokio::task::LocalSet;
 
 #[tokio::main]
 async fn main() {
@@ -38,7 +39,7 @@ async fn main() {
     };
     let server = HashQueryServer::new(Queryer::new(keys));
 
-    let addr = match to_addr(":1539") {
+    let addr = match to_addr("0.0.0.0:1539") {
         Ok(addr) => addr,
         Err(e) => {
             error!("{}", e);
@@ -46,7 +47,8 @@ async fn main() {
         },
     };
 
-    async_std::task::block_on(async move {
+    let localset = LocalSet::new();
+    localset.run_until(async move {
         let listener = match TcpListener::bind(&addr).await {
             Ok(listener) => listener,
             Err(e) => {
@@ -76,9 +78,9 @@ async fn main() {
             let network = VatNetwork::new(reader, writer, Side::Server, Default::default());
 
             let rpc_system = RpcSystem::new(Box::new(network), Some(client.clone().client));
-            async_std::task::spawn_local(rpc_system.map(|_| ()));
+            tokio::task::spawn_local(rpc_system.map(|_| ()));
         }
-    });
+    }).await;
 }
 
 fn to_addr(raw:&str) -> Result<SocketAddr, String> {
