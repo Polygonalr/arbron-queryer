@@ -6,23 +6,45 @@ extern crate log;
 extern crate thiserror;
 
 mod hashes;
+#[allow(dead_code)]
+mod hash_query_capnp;
+use hash_query_capnp::hash_query::Client;
 mod keys;
 use keys::KeysCarousel;
 mod virustotal;
 mod queryer;
 use queryer::Queryer;
 mod requester;
+mod rpc;
+use rpc::HashQueryServer;
+
+use async_std::net::TcpListener;
+use futures::{ AsyncReadExt, FutureExt };
+use std::net::ToSocketAddrs;
+use capnp_rpc::RpcSystem;
+use capnp_rpc::rpc_twoparty_capnp::Side;
+use capnp_rpc::twoparty::VatNetwork;
 
 #[tokio::main]
 async fn main() {
     env_logger::init();
 
     let keys = KeysCarousel::from_file("keys.txt", 15).unwrap();
-    let hashes = vec!["3395856ce81f2b7382dee72602f798b642f14140", "d235c2a0f84d55653fe91d9af7d804f5"];
+    let server = HashQueryServer::new(Queryer::new(keys));
 
-    let queryer = Queryer::new(keys);
-    for hash in hashes {
-        let res = queryer.query(hash).await.unwrap();
-        println!("{:?}", res);
-    }
+    let addr = ":1539".to_socket_addrs().unwrap().next().unwrap();
+    async_std::task::block_on(async move {
+        let listener = TcpListener::bind(&addr).await.unwrap();
+        let client:Client = capnp_rpc::new_client(server);
+
+        loop {
+            let (stream, _) = listener.accept().await.unwrap();
+            stream.set_nodelay(true).unwrap();
+            let (reader, writer) = stream.split();
+            let network = VatNetwork::new(reader, writer, Side::Server, Default::default());
+
+            let rpc_system = RpcSystem::new(Box::new(network), Some(client.clone().client));
+            async_std::task::spawn_local(rpc_system.map(|_| ()));
+        }
+    });
 }

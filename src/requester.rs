@@ -28,9 +28,9 @@ impl RequestError {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct HashResult {
-    hash: String,
-    md5: String,
-    detected: bool,
+    pub hash: String,
+    pub md5: String,
+    pub detected: bool,
 }
 impl HashResult {
     pub fn new(hash:&str, md5:&str, category:&str) -> Self {
