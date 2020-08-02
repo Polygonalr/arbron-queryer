@@ -23,10 +23,11 @@ impl HashQueryServer {
         res.set_hash(&hash_result.hash);
         res.set_detected(hash_result.detected);
 
+        let mut translation = res.init_translation();
         match hashes::categorise_hash(hash) {
-            HashType::Md5 => res.set_md5(()),
+            HashType::Md5 => translation.set_md5(()),
             _ => {
-                let mut translation = res.init_translation();
+                let mut translation = translation.init_translation();
                 translation.set_original(hash);
                 translation.set_md5(&hash_result.md5);
             },
