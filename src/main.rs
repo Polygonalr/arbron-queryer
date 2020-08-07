@@ -5,6 +5,8 @@ extern crate log;
 #[macro_use]
 extern crate thiserror;
 
+mod config;
+use config::Config;
 mod hashes;
 #[allow(dead_code)]
 mod hash_query_capnp;
@@ -22,7 +24,6 @@ use rpc::HashQueryServer;
 
 use async_std::net::TcpListener;
 use futures::{ AsyncReadExt, FutureExt };
-use std::net::{ ToSocketAddrs, SocketAddr };
 use capnp_rpc::RpcSystem;
 use capnp_rpc::rpc_twoparty_capnp::Side;
 use capnp_rpc::twoparty::VatNetwork;
@@ -30,9 +31,12 @@ use tokio::task::LocalSet;
 
 #[tokio::main]
 async fn main() {
+    dotenv::dotenv().ok();
     env_logger::init();
 
-    let keys = match KeysCarousel::from_file("keys.txt", 15) {
+    let config = Config::load();
+
+    let keys = match KeysCarousel::from_file(&config.keys_path, config.timeout) {
         Ok(keys) => keys,
         Err(e) => {
             error!("error reading keys file: {}", e);
@@ -41,17 +45,9 @@ async fn main() {
     };
     let server = HashQueryServer::new(Queryer::new(keys));
 
-    let addr = match to_addr("0.0.0.0:1539") {
-        Ok(addr) => addr,
-        Err(e) => {
-            error!("{}", e);
-            return;
-        },
-    };
-
     let localset = LocalSet::new();
     localset.run_until(async move {
-        let listener = match TcpListener::bind(&addr).await {
+        let listener = match TcpListener::bind(&config.listen).await {
             Ok(listener) => listener,
             Err(e) => {
                 error!("cannot bind listener: {}", e);
@@ -61,7 +57,7 @@ async fn main() {
 
         let client:Client = capnp_rpc::new_client(server);
 
-        info!("listening on {}", addr);
+        info!("listening on {}", config.listen);
         loop {
             let stream = match listener.accept().await {
                 Ok((stream, _)) => stream,
@@ -83,11 +79,4 @@ async fn main() {
             tokio::task::spawn_local(rpc_system.map(|_| ()));
         }
     }).await;
-}
-
-fn to_addr(raw:&str) -> Result<SocketAddr, String> {
-    raw.to_socket_addrs()
-        .map_err(|e| format!("error parsing address: {}", e))?
-        .next()
-        .map_or(Err(String::from("no address found in provided raw")), |addr| Ok(addr))
 }

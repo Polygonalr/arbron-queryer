@@ -12,6 +12,7 @@ build = "build.rs"
 async-std = { version = "1.6.2", features = [ "unstable" ] }
 capnp = "0.13.3"
 capnp-rpc = "0.13.1"
+dotenv = "0.15.0"
 env_logger = "0.7.1"
 futures = "0.3"
 lazy_static = "1.0"
