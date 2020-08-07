@@ -9,6 +9,8 @@ mod hashes;
 #[allow(dead_code)]
 mod hash_query_capnp;
 use hash_query_capnp::hash_query::Client;
+#[allow(dead_code)]
+mod response_capnp;
 mod keys;
 use keys::KeysCarousel;
 mod virustotal;

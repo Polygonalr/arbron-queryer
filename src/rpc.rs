@@ -19,7 +19,8 @@ impl HashQueryServer {
         let hash = request.get_hash()?;
         let hash_result = queryer.query(hash).await.map_err(|e| capnp::Error::failed(format!("{}", e)))?;
 
-        let mut res = res.get().init_res();
+        let option = res.get().init_res();
+        let mut res = option.init_some();
         res.set_hash(&hash_result.hash);
         res.set_detected(hash_result.detected);
 

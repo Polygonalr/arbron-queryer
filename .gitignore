@@ -1,3 +1,4 @@
 /target
 keys.txt
 src/hash_query_capnp.rs
+src/response_capnp.rs
