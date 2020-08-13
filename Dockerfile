@@ -25,5 +25,6 @@ RUN sudo touch src/main.rs;\
 
 # Runtime image
 FROM scratch
+COPY --from=build /etc/ssl/certs/ /etc/ssl/certs/
 COPY --from=build /home/rust/src/target/x86_64-unknown-linux-musl/release/queryer .
 CMD [ "./queryer" ]
