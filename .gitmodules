@@ -1,3 +1,4 @@
 [submodule "protos"]
 	path = protos
-	url = ssh://git@git.octalorca.me:31256/sombra/arbron-protos.git
+	url = http://git.octalorca.me/sombra/arbron-protos.git
+	
